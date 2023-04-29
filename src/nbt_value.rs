@@ -142,7 +142,21 @@ impl NbtValue {
                 Ok(NbtValue::IntArray(output))
             }
             TAG_LONG_ARRAY => {
-                todo!("long array")
+                let size = Self::i32_from_iter(iter)? as usize;
+                let mut output = Vec::with_capacity(size);
+                for _ in 0..size {
+                    output.push(i64::from_be_bytes([
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                        iter.next().ok_or(Error::Malformed(line!()))?.to_owned(),
+                    ]))
+                }
+                Ok(NbtValue::LongArray(output))
             }
             _ => Err(Error::Malformed(line!())),
         }
