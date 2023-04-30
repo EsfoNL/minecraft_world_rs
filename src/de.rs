@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use crate::NbtValue;
 use serde::Deserialize;
 
-pub fn from_bytes<'de, V>(input: &'de [u8]) -> Result<V>
+pub fn from_bytes<'de, V>(input: &'de mut [u8]) -> Result<V>
 where
     V: Deserialize<'de>,
 {
@@ -16,8 +16,8 @@ pub struct Deserializer {
 }
 
 impl<'de> Deserializer {
-    fn new(input: &'de [u8]) -> Result<Self> {
-        let input = NbtValue::from_bytes(input)?.1;
+    fn new(input: &'de mut [u8]) -> Result<Self> {
+        let input = NbtValue::from_reader(&mut &*input)?.1;
         Ok(Self { input })
     }
 }

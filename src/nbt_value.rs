@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fmt::Debug, iter::Peekable};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    io::{Read, Write},
+};
+
+use flate2::Compression;
 
 use crate::{Error, Result};
 
@@ -50,17 +56,26 @@ pub enum NbtList {
 }
 
 impl NbtValue {
-    pub fn from_bytes<'a>(input: &'a [u8]) -> Result<(String, NbtValue)> {
-        let iter = input.iter();
-        Self::from_bytes_iter(iter)
-    }
-    pub fn from_bytes_iter<'a, T>(mut iter: T) -> Result<(String, NbtValue)>
+    pub fn from_reader<T>(reader: T) -> Result<(String, NbtValue)>
     where
-        T: Iterator<Item = &'a u8> + Debug,
+        T: Read + Debug,
     {
+        let binding = reader
+            .bytes()
+            .map(|e| e.map_err(|_| Error::FileError))
+            .collect::<Result<Vec<u8>>>()?;
+        let mut iter = binding.iter();
         let tag = iter.next().ok_or(Error::Malformed(line!()))?.to_owned();
         let name = Self::string_from_iter(&mut iter)?;
         Ok((name, Self::deserialize(&mut iter, tag)?))
+    }
+
+    pub fn from_compressed_reader<T>(reader: T) -> Result<(String, NbtValue)>
+    where
+        T: Read + Debug,
+    {
+        let mut bytes = flate2::read::GzDecoder::new(reader);
+        Self::from_reader(bytes)
     }
 
     fn deserialize<'a, T>(iter: &mut T, tag: u8) -> Result<NbtValue>
@@ -88,10 +103,10 @@ impl NbtValue {
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
-        let size = Self::i32_from_iter(iter)? as usize;
+        let size = Self::i32_from_iter(&mut *iter)? as usize;
         let mut output = Vec::with_capacity(size);
         for _ in 0..size {
-            output.push(Self::i64_from_iter(iter)?);
+            output.push(Self::i64_from_iter(&mut *iter)?);
         }
         Ok(output)
     }
@@ -114,7 +129,7 @@ impl NbtValue {
     {
         let mut output = HashMap::new();
         loop {
-            let tag = iter.next().ok_or(Error::Malformed(line!()))?.to_owned();
+            let tag = (iter).next().ok_or(Error::Malformed(line!()))?.to_owned();
             if tag == TAG_END {
                 break;
             } else {
@@ -230,7 +245,7 @@ impl NbtValue {
         let length = Self::u16_from_iter(iter)? as usize;
         let mut buf = Vec::with_capacity(length);
         for _ in 0..length {
-            buf.push(iter.next().unwrap().to_owned());
+            buf.push(iter.next().ok_or(Error::Malformed(line!()))?.to_owned());
         }
         let string = String::from_utf8(buf).map_err(|_| Error::Malformed(line!()))?;
         Ok(string)
@@ -326,7 +341,9 @@ impl NbtValue {
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
+        eprintln!("{iter:?}");
         let size = Self::i32_from_iter(iter)? as usize;
+        eprintln!("{size}");
         let mut output = Vec::with_capacity(size);
         for _ in 0..size {
             output.push(i8::from_be_bytes([iter
@@ -337,62 +354,243 @@ impl NbtValue {
         Ok(output)
     }
 
-    fn to_bytes(&self, name: &str) -> Vec<u8> {
-        let mut buffer = Vec::new();
+    pub fn to_writer<T>(&self, name: &str, writer: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        self.serialize(name, writer)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn to_compressed_writer<T>(&self, name: &str, mut writer: T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        let mut encoder = flate2::write::GzEncoder::new(writer, Compression::new(9));
+        self.serialize(name, &mut encoder)?;
+        encoder.flush()?;
+        drop(encoder);
+        Ok(())
+    }
+
+    pub fn serialize<T>(&self, name: &str, buffer: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
         match self {
             NbtValue::Byte(v) => {
-                buffer.push(TAG_BYTE);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_BYTE])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::Short(v) => {
-                buffer.push(TAG_SHORT);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_SHORT])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::Int(v) => {
-                buffer.push(TAG_INT);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_INT])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::Long(v) => {
-                buffer.push(TAG_LONG);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_LONG])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::Float(v) => {
-                buffer.push(TAG_FLOAT);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_FLOAT])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::Double(v) => {
-                buffer.push(TAG_DOUBLE);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&v.to_be_bytes());
+                buffer.write_all(&[TAG_DOUBLE])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&v.to_be_bytes())?;
             }
             NbtValue::ByteArray(v) => {
-                buffer.push(TAG_BYTE_ARRAY);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&(v.len() as i32).to_be_bytes());
-                buffer.extend(v.iter().map(|f| f.to_be_bytes()[0]));
+                buffer.write_all(&[TAG_BYTE_ARRAY])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                buffer.write_all(
+                    &v.iter()
+                        .map(|f| f.to_be_bytes())
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                )?;
             }
             NbtValue::String(v) => {
-                buffer.push(TAG_BYTE_ARRAY);
-                Self::push_name(&mut buffer, name);
-                buffer.extend_from_slice(&(v.len() as u16).to_be_bytes());
-                buffer.extend_from_slice(v.as_bytes());
+                buffer.write_all(&[TAG_STRING])?;
+                Self::push_string(buffer, name)?;
+                Self::push_string(buffer, v)?;
             }
             NbtValue::List(v) => {
-                buffer.push(TAG_LIST);
+                buffer.write_all(&[TAG_LIST])?;
+                Self::push_string(buffer, name)?;
+                Self::serialize_list(buffer, v)?;
             }
-            NbtValue::Compound(_) => todo!(),
-            NbtValue::IntArray(_) => todo!(),
-            NbtValue::LongArray(_) => todo!(),
+            NbtValue::Compound(v) => {
+                buffer.write_all(&[TAG_COMPOUND])?;
+                Self::push_string(buffer, name)?;
+                for (key, value) in v.iter() {
+                    value.serialize(key, buffer)?;
+                }
+                buffer.write_all(&[TAG_END])?;
+            }
+            NbtValue::IntArray(v) => {
+                buffer.write_all(&[TAG_INT_ARRAY])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                buffer.write_all(
+                    &v.iter()
+                        .map(|f| f.to_be_bytes())
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                )?;
+            }
+            NbtValue::LongArray(v) => {
+                buffer.write_all(&[TAG_INT_ARRAY])?;
+                Self::push_string(buffer, name)?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                buffer.write_all(
+                    &v.iter()
+                        .map(|f| f.to_be_bytes())
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                )?;
+            }
         }
-        buffer
+        Ok(())
     }
-    fn push_name(buffer: &mut Vec<u8>, name: &str) {
-        buffer.extend_from_slice(&(name.len() as u32).to_be_bytes());
-        buffer.extend_from_slice(name.as_bytes());
+
+    fn serialize_list<T>(buffer: &mut T, list: &NbtList) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        match list {
+            NbtList::ByteList(v) => {
+                buffer.write_all(&[TAG_BYTE])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::ShortList(v) => {
+                buffer.write_all(&[TAG_SHORT])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::IntList(v) => {
+                buffer.write_all(&[TAG_INT])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::LongList(v) => {
+                buffer.write_all(&[TAG_LONG])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::FloatList(v) => {
+                buffer.write_all(&[TAG_FLOAT])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::DoubleList(v) => {
+                buffer.write_all(&[TAG_DOUBLE])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v.iter() {
+                    buffer.write_all(&i.to_be_bytes())?;
+                }
+            }
+            NbtList::ByteArrayList(v) => {
+                buffer.write_all(&[TAG_BYTE_ARRAY])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                    buffer.write_all(
+                        &i.iter()
+                            .map(|e| e.to_be_bytes().into_iter())
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                    )?;
+                }
+            }
+            NbtList::StringList(v) => {
+                buffer.write_all(&[TAG_STRING])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    Self::push_string(buffer, &i)?;
+                }
+            }
+            NbtList::ListList(v) => {
+                buffer.write_all(&[TAG_LIST])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    Self::serialize_list(buffer, i)?;
+                }
+            }
+            NbtList::CompoundList(v) => {
+                buffer.write_all(&[TAG_COMPOUND])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    for (key, value) in i.iter() {
+                        value.serialize(key, buffer)?;
+                    }
+                    buffer.write_all(&[TAG_END])?;
+                }
+            }
+            NbtList::IntArrayList(v) => {
+                buffer.write_all(&[TAG_INT_ARRAY])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                    buffer.write_all(
+                        &i.iter()
+                            .map(|e| e.to_be_bytes().into_iter())
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                    )?;
+                }
+            }
+            NbtList::LongArrayList(v) => {
+                buffer.write_all(&[TAG_INT_ARRAY])?;
+                buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                for i in v {
+                    buffer.write_all(&(v.len() as i32).to_be_bytes())?;
+                    buffer.write_all(
+                        &i.iter()
+                            .map(|e| e.to_be_bytes().into_iter())
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                    )?;
+                }
+            }
+            NbtList::EmptyList => {
+                buffer.write_all(&[TAG_END])?;
+                buffer.write_all(&[0])?;
+                buffer.write_all(&[0])?;
+                buffer.write_all(&[0])?;
+                buffer.write_all(&[0])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn push_string<T>(buffer: &mut T, name: &str) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        buffer.write_all(&(name.len() as u16).to_be_bytes())?;
+        buffer.write_all(name.as_bytes())?;
+        Ok(())
     }
 }

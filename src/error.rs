@@ -3,6 +3,8 @@ pub enum Error {
     Unit,
     Malformed(u32),
     Custom(String),
+    FileError,
+    CompressionError,
 }
 
 impl std::error::Error for Error {}
