@@ -2,7 +2,10 @@ use pyo3::{
     exceptions::{PyIOError, PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError},
     prelude::*,
 };
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{NbtList, NbtValue};
 
@@ -10,6 +13,7 @@ use crate::{NbtList, NbtValue};
 pub struct PyNbt {
     name: String,
     nbt: Arc<Mutex<NbtValue>>,
+    iter: Mutex<Option<std::vec::IntoIter<PyNbt>>>,
 }
 
 #[allow(unused)]
@@ -209,6 +213,10 @@ impl PyNbt {
         Ok(())
     }
 
+    fn name<'a>(slf: PyRef<'a, Self>) -> String {
+        slf.name.clone()
+    }
+
     #[pyo3(signature = (path, compressed=true))]
     fn to_file(slf: PyRef<'_, Self>, path: String, compressed: bool) -> PyResult<()> {
         let mut file = std::fs::File::create(path)?;
@@ -219,11 +227,41 @@ impl PyNbt {
             Ok(lock.to_writer(&slf.name, &mut file)?)
         }
     }
+    fn __iter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        let mut lock = slf.nbt.lock().unwrap();
+        match *lock {
+            NbtValue::Compound(ref mut v) => {
+                let mut lock = slf.iter.lock().unwrap();
+                *lock = Some(
+                    v.iter()
+                        .map(|f| PyNbt::new(f.0.to_owned(), f.1.clone()))
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
+            }
+            _ => Err(PyNotImplementedError::new_err(
+                "not yet implemented for non-compounds",
+            ))?,
+        }
+        drop(lock);
+        Ok(slf)
+    }
+    fn __next__(slf: PyRef<'_, Self>) -> Option<PyNbt> {
+        if let Some(ref mut v) = *slf.iter.lock().unwrap() {
+            v.next()
+        } else {
+            None
+        }
+    }
 }
 
 impl PyNbt {
     fn new(name: String, nbt: Arc<Mutex<NbtValue>>) -> Self {
-        PyNbt { name, nbt }
+        PyNbt {
+            name,
+            nbt,
+            iter: Mutex::new(None),
+        }
     }
 }
 
