@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::error::{Error, Result};
 use crate::NbtValue;
 use serde::Deserialize;
@@ -12,7 +14,7 @@ where
 
 #[derive(Debug)]
 pub struct Deserializer {
-    input: NbtValue,
+    input: Arc<Mutex<NbtValue>>,
 }
 
 impl<'de> Deserializer {

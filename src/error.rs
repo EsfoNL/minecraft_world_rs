@@ -3,7 +3,7 @@ pub enum Error {
     Unit,
     Malformed(u32),
     Custom(String),
-    FileError,
+    FileError(std::io::Error),
     CompressionError,
 }
 
