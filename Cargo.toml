@@ -7,8 +7,9 @@ edition = "2021"
 
 [dependencies]
 flate2 = "1.0.26"
-pyo3 = "0.18.3"
+pyo3 = { version = "0.18.3", features = ["abi3-py37", "extension-module"] }
 serde = { version = "1.0.160", features = ["derive"] }
 
 [lib]
-crate-type = ["cdylib"]
+name = "minecraft_world"
+crate-type = ["cdylib", "lib"]

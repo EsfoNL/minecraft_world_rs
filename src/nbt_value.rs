@@ -6,7 +6,6 @@ use std::{
 };
 
 use flate2::Compression;
-use pyo3::pyfunction;
 
 use crate::{Error, Result};
 

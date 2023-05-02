@@ -1,6 +1,5 @@
-use core::panic;
 use pyo3::{
-    exceptions::{PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError},
+    exceptions::{PyIOError, PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError},
     prelude::*,
 };
 use std::sync::{Arc, Mutex};
@@ -13,6 +12,7 @@ pub struct PyNbt {
     nbt: Arc<Mutex<NbtValue>>,
 }
 
+#[allow(unused)]
 #[pyclass(mapping)]
 pub struct PyNbtList {
     name: String,
@@ -64,7 +64,6 @@ impl PyNbt {
                     NbtList::IntArrayList(ref v) => v.get(index).ok_or(error)?.to_object(slf.py()),
                     NbtList::LongArrayList(ref v) => v.get(index).ok_or(error)?.to_object(slf.py()),
                     NbtList::EmptyList => Err(error)?,
-                    _ => panic!(),
                 })
             }
             NbtValue::Compound(ref v) => {
@@ -80,6 +79,10 @@ impl PyNbt {
             _ => Err(PyTypeError::new_err("not an array or map")),
         }
     }
+    fn __repr__(slf: PyRef<'_, Self>) -> String {
+        format!("{}: {:?}", slf.name, *slf.nbt.lock().unwrap())
+    }
+
     fn __setitem__(slf: PyRef<'_, Self>, obj: &PyAny, value: &PyAny) -> PyResult<()> {
         let mut lock = slf.nbt.lock().unwrap();
         let error = PyIndexError::new_err("index out of range");
@@ -121,10 +124,13 @@ impl PyNbt {
                         *(v.get_mut(index)).ok_or(error)? = value.extract()?;
                     }
 
-                    NbtList::ListList(ref mut v) => {}
+                    NbtList::ListList(ref mut v) => {
+                        let _val = v.get_mut(index).ok_or(error)?;
+                        Err(PyNotImplementedError::new_err("list setting not supported"))?
+                    }
 
                     NbtList::CompoundList(ref mut v) => {
-                        let val = v.get_mut(index).ok_or(error)?;
+                        let _val = v.get_mut(index).ok_or(error)?;
                         Err(PyNotImplementedError::new_err(
                             "compound setting not supported",
                         ))?
@@ -169,12 +175,49 @@ impl PyNbt {
         }
         Ok(())
     }
-
     fn __str__(slf: PyRef<'_, Self>) -> String {
         format!("{}: {:?}", slf.name, *slf.nbt.lock().unwrap())
     }
-    fn __repr__(slf: PyRef<'_, Self>) -> String {
-        format!("{}: {:?}", slf.name, *slf.nbt.lock().unwrap())
+
+    #[new]
+    #[pyo3(signature = (path, compressed=true))]
+    fn from_file(path: String, compressed: bool) -> PyResult<Self> {
+        let file = std::fs::File::open(path)?;
+        let (name, nbt) = (if compressed {
+            NbtValue::from_compressed_reader(file)
+        } else {
+            NbtValue::from_reader(file)
+        })
+        .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        Ok(PyNbt::new(name, nbt))
+    }
+
+    fn set(slf: PyRef<'_, Self>, obj: &PyAny) -> PyResult<()> {
+        let mut lock = slf.nbt.lock().unwrap();
+        match *lock {
+            NbtValue::Byte(ref mut v) => *v = obj.extract()?,
+            NbtValue::Short(ref mut v) => *v = obj.extract()?,
+            NbtValue::Int(ref mut v) => *v = obj.extract()?,
+            NbtValue::Long(ref mut v) => *v = obj.extract()?,
+            NbtValue::Float(ref mut v) => *v = obj.extract()?,
+            NbtValue::Double(ref mut v) => *v = obj.extract()?,
+            NbtValue::String(ref mut v) => *v = obj.extract()?,
+            _ => Err(PyNotImplementedError::new_err(
+                "compound and list assignment not implemented yet",
+            ))?,
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (path, compressed=true))]
+    fn to_file(slf: PyRef<'_, Self>, path: String, compressed: bool) -> PyResult<()> {
+        let mut file = std::fs::File::create(path)?;
+        let lock = slf.nbt.lock().unwrap();
+        if compressed {
+            Ok(lock.to_compressed_writer(&slf.name, &mut file)?)
+        } else {
+            Ok(lock.to_writer(&slf.name, &mut file)?)
+        }
     }
 }
 
@@ -184,15 +227,10 @@ impl PyNbt {
     }
 }
 
-#[pyfunction]
-pub fn from_compressed_file(path: String) -> PyNbt {
-    let file = std::fs::File::open(path).expect("failed to open file");
-    let (name, nbt) = NbtValue::from_compressed_reader(file).expect("failed to parse");
-    PyNbt::new(name, nbt).into()
-}
-
 #[pymodule]
-fn nbt(py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(from_compressed_file, m)?)?;
+#[pyo3(name = "nbt")]
+fn nbt(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyNbt>()?;
+    m.add_class::<PyNbtList>()?;
     Ok(())
 }
