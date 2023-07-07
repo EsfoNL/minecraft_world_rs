@@ -13,13 +13,4 @@ impl std::fmt::Display for Error {
         f.write_fmt(format_args!("{:#?}", self))
     }
 }
-impl serde::de::Error for Error {
-    fn custom<T>(msg: T) -> Self
-    where
-        T: std::fmt::Display,
-    {
-        Self::Custom(format!("{msg}"))
-    }
-}
-
 pub type Result<T> = std::result::Result<T, Error>;
