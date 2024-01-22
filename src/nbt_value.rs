@@ -2,8 +2,9 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     io::{Read, Write},
-    sync::{Arc, Mutex},
 };
+
+use serde::{Deserialize, Serialize};
 
 use flate2::Compression;
 
@@ -23,7 +24,7 @@ const TAG_COMPOUND: u8 = 10;
 const TAG_INT_ARRAY: u8 = 11;
 const TAG_LONG_ARRAY: u8 = 12;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum NbtValue {
     Byte(i8),
     Short(i16),
@@ -33,13 +34,13 @@ pub enum NbtValue {
     Double(f64),
     ByteArray(Vec<i8>),
     String(String),
-    List(Arc<Mutex<NbtList>>),
-    Compound(HashMap<String, Arc<Mutex<NbtValue>>>),
+    List(NbtList),
+    Compound(HashMap<String, NbtValue>),
     IntArray(Vec<i32>),
     LongArray(Vec<i64>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum NbtList {
     ByteList(Vec<i8>),
     ShortList(Vec<i16>),
@@ -49,21 +50,15 @@ pub enum NbtList {
     DoubleList(Vec<f64>),
     ByteArrayList(Vec<Vec<i8>>),
     StringList(Vec<String>),
-    ListList(Vec<Arc<Mutex<NbtList>>>),
-    CompoundList(Vec<HashMap<String, Arc<Mutex<NbtValue>>>>),
+    ListList(Vec<NbtList>),
+    CompoundList(Vec<HashMap<String, NbtValue>>),
     IntArrayList(Vec<Vec<i32>>),
     LongArrayList(Vec<Vec<i64>>),
     EmptyList,
 }
 
-impl NbtList {
-    fn wrapped(self) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(self))
-    }
-}
-
 impl NbtValue {
-    pub fn from_reader<T>(reader: T) -> Result<(String, Arc<Mutex<NbtValue>>)>
+    pub fn from_reader<T>(reader: T) -> Result<(String, NbtValue)>
     where
         T: Read + Debug,
     {
@@ -77,7 +72,7 @@ impl NbtValue {
         Ok((name, Self::deserialize(&mut iter, tag)?))
     }
 
-    pub fn from_compressed_reader<T>(reader: T) -> Result<(String, Arc<Mutex<NbtValue>>)>
+    pub fn from_compressed_reader<T>(reader: T) -> Result<(String, NbtValue)>
     where
         T: Read + Debug,
     {
@@ -85,23 +80,23 @@ impl NbtValue {
         Self::from_reader(bytes)
     }
 
-    fn deserialize<'a, T>(iter: &mut T, tag: u8) -> Result<Arc<Mutex<NbtValue>>>
+    fn deserialize<'a, T>(iter: &mut T, tag: u8) -> Result<NbtValue>
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
         match tag {
-            TAG_BYTE => Ok(NbtValue::Byte(Self::i8_from_iter(iter)?).wrapped()),
-            TAG_SHORT => Ok(NbtValue::Short(Self::i16_from_iter(iter)?).wrapped()),
-            TAG_INT => Ok(NbtValue::Int(Self::i32_from_iter(iter)?).wrapped()),
-            TAG_LONG => Ok(NbtValue::Long(Self::i64_from_iter(iter)?).wrapped()),
-            TAG_FLOAT => Ok(NbtValue::Float(Self::f32_from_iter(iter)?).wrapped()),
-            TAG_DOUBLE => Ok(NbtValue::Double(Self::f64_from_iter(iter)?).wrapped()),
-            TAG_BYTE_ARRAY => Ok(NbtValue::ByteArray(Self::byte_array_from_iter(iter)?).wrapped()),
-            TAG_STRING => Ok(NbtValue::String(Self::string_from_iter(iter)?).wrapped()),
-            TAG_LIST => Ok(NbtValue::List(Self::list_from_iter(iter)?).wrapped()),
-            TAG_COMPOUND => Ok(NbtValue::Compound(Self::compound_from_iter(iter)?).wrapped()),
-            TAG_INT_ARRAY => Ok(NbtValue::IntArray(Self::int_array_from_iter(iter)?).wrapped()),
-            TAG_LONG_ARRAY => Ok(NbtValue::LongArray(Self::long_array_from_iter(iter)?).wrapped()),
+            TAG_BYTE => Ok(NbtValue::Byte(Self::i8_from_iter(iter)?)),
+            TAG_SHORT => Ok(NbtValue::Short(Self::i16_from_iter(iter)?)),
+            TAG_INT => Ok(NbtValue::Int(Self::i32_from_iter(iter)?)),
+            TAG_LONG => Ok(NbtValue::Long(Self::i64_from_iter(iter)?)),
+            TAG_FLOAT => Ok(NbtValue::Float(Self::f32_from_iter(iter)?)),
+            TAG_DOUBLE => Ok(NbtValue::Double(Self::f64_from_iter(iter)?)),
+            TAG_BYTE_ARRAY => Ok(NbtValue::ByteArray(Self::byte_array_from_iter(iter)?)),
+            TAG_STRING => Ok(NbtValue::String(Self::string_from_iter(iter)?)),
+            TAG_LIST => Ok(NbtValue::List(Self::list_from_iter(iter)?)),
+            TAG_COMPOUND => Ok(NbtValue::Compound(Self::compound_from_iter(iter)?)),
+            TAG_INT_ARRAY => Ok(NbtValue::IntArray(Self::int_array_from_iter(iter)?)),
+            TAG_LONG_ARRAY => Ok(NbtValue::LongArray(Self::long_array_from_iter(iter)?)),
             _ => Err(Error::Malformed(line!())),
         }
     }
@@ -130,7 +125,7 @@ impl NbtValue {
         Ok(output)
     }
 
-    fn compound_from_iter<'a, T>(iter: &mut T) -> Result<HashMap<String, Arc<Mutex<NbtValue>>>>
+    fn compound_from_iter<'a, T>(iter: &mut T) -> Result<HashMap<String, NbtValue>>
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
@@ -148,11 +143,7 @@ impl NbtValue {
         Ok(output)
     }
 
-    fn wrapped(self) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(self))
-    }
-
-    fn list_from_iter<'a, T>(iter: &mut T) -> Result<Arc<Mutex<NbtList>>>
+    fn list_from_iter<'a, T>(iter: &mut T) -> Result<NbtList>
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
@@ -164,86 +155,86 @@ impl NbtValue {
                 for _ in 0..size {
                     output.push(Self::i8_from_iter(iter)?);
                 }
-                Ok(NbtList::ByteList(output).wrapped())
+                Ok(NbtList::ByteList(output))
             }
             TAG_SHORT => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::i16_from_iter(iter)?);
                 }
-                Ok(NbtList::ShortList(output).wrapped())
+                Ok(NbtList::ShortList(output))
             }
             TAG_INT => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::i32_from_iter(iter)?);
                 }
-                Ok(NbtList::IntList(output).wrapped())
+                Ok(NbtList::IntList(output))
             }
             TAG_LONG => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::i64_from_iter(iter)?);
                 }
-                Ok(NbtList::LongList(output).wrapped())
+                Ok(NbtList::LongList(output))
             }
             TAG_FLOAT => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::f32_from_iter(iter)?);
                 }
-                Ok(NbtList::FloatList(output).wrapped())
+                Ok(NbtList::FloatList(output))
             }
             TAG_DOUBLE => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::f64_from_iter(iter)?);
                 }
-                Ok(NbtList::DoubleList(output).wrapped())
+                Ok(NbtList::DoubleList(output))
             }
             TAG_BYTE_ARRAY => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::byte_array_from_iter(iter)?);
                 }
-                Ok(NbtList::ByteArrayList(output).wrapped())
+                Ok(NbtList::ByteArrayList(output))
             }
             TAG_STRING => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::string_from_iter(iter)?);
                 }
-                Ok(NbtList::StringList(output).wrapped())
+                Ok(NbtList::StringList(output))
             }
             TAG_LIST => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::list_from_iter(iter)?);
                 }
-                Ok(NbtList::ListList(output).wrapped())
+                Ok(NbtList::ListList(output))
             }
             TAG_COMPOUND => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::compound_from_iter(iter)?);
                 }
-                Ok(NbtList::CompoundList(output).wrapped())
+                Ok(NbtList::CompoundList(output))
             }
             TAG_INT_ARRAY => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::int_array_from_iter(iter)?);
                 }
-                Ok(NbtList::IntArrayList(output).wrapped())
+                Ok(NbtList::IntArrayList(output))
             }
             TAG_LONG_ARRAY => {
                 let mut output = Vec::new();
                 for _ in 0..size {
                     output.push(Self::long_array_from_iter(iter)?);
                 }
-                Ok(NbtList::LongArrayList(output).wrapped())
+                Ok(NbtList::LongArrayList(output))
             }
-            TAG_END => Ok(NbtList::EmptyList.wrapped()),
+            TAG_END => Ok(NbtList::EmptyList),
             _ => Err(Error::Malformed(line!())),
         }
     }
@@ -365,11 +356,11 @@ impl NbtValue {
         Ok(output)
     }
 
-    pub fn to_writer<T>(&self, name: &str, writer: &mut T) -> std::io::Result<()>
+    pub fn to_writer<T>(&self, name: &str, mut writer: T) -> std::io::Result<()>
     where
         T: Write,
     {
-        self.serialize(name, writer)?;
+        self.serialize(name, &mut writer)?;
         writer.flush()?;
         Ok(())
     }
@@ -439,15 +430,13 @@ impl NbtValue {
             NbtValue::List(v) => {
                 buffer.write_all(&[TAG_LIST])?;
                 Self::push_string(buffer, name)?;
-                let lock = v.lock().expect("failed to lock");
-                Self::serialize_list(buffer, &lock)?;
+                Self::serialize_list(buffer, v)?;
             }
             NbtValue::Compound(v) => {
                 buffer.write_all(&[TAG_COMPOUND])?;
                 Self::push_string(buffer, name)?;
                 for (key, value) in v.iter() {
-                    let lock = value.lock().expect("failed to lock");
-                    lock.serialize(key, buffer)?;
+                    value.serialize(key, buffer)?;
                 }
                 buffer.write_all(&[TAG_END])?;
             }
@@ -548,8 +537,7 @@ impl NbtValue {
                 buffer.write_all(&[TAG_LIST])?;
                 buffer.write_all(&(v.len() as i32).to_be_bytes())?;
                 for i in v {
-                    let lock = i.lock().expect("failed to lock");
-                    Self::serialize_list(buffer, &lock)?;
+                    Self::serialize_list(buffer, i)?;
                 }
             }
             NbtList::CompoundList(v) => {
@@ -557,8 +545,7 @@ impl NbtValue {
                 buffer.write_all(&(v.len() as i32).to_be_bytes())?;
                 for i in v {
                     for (key, value) in i.iter() {
-                        let lock = value.lock().expect("failed to lock");
-                        lock.serialize(key, buffer)?;
+                        value.serialize(key, buffer)?;
                     }
                     buffer.write_all(&[TAG_END])?;
                 }

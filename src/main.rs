@@ -1,23 +1,74 @@
-use minecraft_world::{NbtList, NbtValue};
+use minecraft_world::Result;
+use std::fmt::Debug;
+use std::io::{Read, Write};
+
+use clap::Parser;
+use minecraft_world::NbtValue;
+use serde::{Deserialize, Serialize};
+#[derive(Parser)]
+enum Options {
+    FromJson,
+    ToJson,
+    CompressedFromJson,
+    CompressedToJson,
+}
+
+#[derive(Serialize, Deserialize)]
+struct NbtFile {
+    name: String,
+    nbt: NbtValue,
+}
+
+impl NbtFile {
+    pub fn to_writer<T>(&self, writer: T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        self.nbt.to_writer(&self.name, writer)
+    }
+    pub fn to_compressed_writer<T>(&self, writer: T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        self.nbt.to_compressed_writer(&self.name, writer)
+    }
+
+    pub fn from_reader<T>(reader: T) -> Result<Self>
+    where
+        T: Read + Debug,
+    {
+        let (name, nbt) = NbtValue::from_reader(reader)?;
+        Ok(Self { name, nbt })
+    }
+    pub fn from_compressed_reader<T>(reader: T) -> Result<Self>
+    where
+        T: Read + Debug,
+    {
+        let (name, nbt) = NbtValue::from_compressed_reader(reader)?;
+        Ok(Self { name, nbt })
+    }
+}
 
 fn main() {
-    // let mut args = std::env::args();
-    // let file_name = args.nth(1).expect("failed to provide file");
-    // let out_file_name = args.next().unwrap_or(String::from("/tmp/nbt"));
-    // println!("file_name: {file_name}, out_file_name: {out_file_name}");
-    // let mut file = std::fs::File::open(file_name).expect("failed to read file");
-    // let (name, mut nbt) = NbtValue::from_compressed_reader(file).expect("failed to parse file");
-    // let mut nbt_ref = nbt;
-    // let mut list_index: Vec<usize> = vec![];
-    // let stdin = std::io::stdin();
-    // for i in stdin.lines().map(|e| e.unwrap()) {
-    //     match i[0] {
-    //         ''
-    //     }
-    // }
-
-    // eprintln!("{nbt:?}");
-    // let out_file = std::fs::File::create(out_file_name).expect("failed to open file");
-    // nbt.to_compressed_writer(&name, out_file)
-    //     .expect("failed to write file");
+    let cmd = Options::parse();
+    match cmd {
+        Options::FromJson => serde_json::de::from_reader::<_, NbtFile>(std::io::stdin())
+            .unwrap()
+            .to_writer(std::io::stdout())
+            .unwrap(),
+        Options::ToJson => serde_json::ser::to_writer(
+            std::io::stdout(),
+            &NbtFile::from_reader(std::io::stdin()).unwrap(),
+        )
+        .unwrap(),
+        Options::CompressedFromJson => serde_json::de::from_reader::<_, NbtFile>(std::io::stdin())
+            .unwrap()
+            .to_compressed_writer(std::io::stdout())
+            .unwrap(),
+        Options::CompressedToJson => serde_json::ser::to_writer(
+            std::io::stdout(),
+            &NbtFile::from_compressed_reader(std::io::stdin()).unwrap(),
+        )
+        .unwrap(),
+    }
 }
