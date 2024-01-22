@@ -29,4 +29,4 @@ to c-nbt
 ```
 convert structured data to compressed nbt
 
-nbt format specs taken from (NBT format)[https://minecraft.wiki/w/NBT_format#Binary_format]
+nbt format specs taken from [NBT format](https://minecraft.wiki/w/NBT_format#Binary_format)
