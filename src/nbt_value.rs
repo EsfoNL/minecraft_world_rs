@@ -4,7 +4,12 @@ use std::{
     io::{Read, Write},
 };
 
-use serde::{Deserialize, Serialize};
+use either::Either;
+use enumtype_derive::enum_convert;
+use pyo3::{
+    exceptions::PyValueError, pyclass, pymethods, types::PyInt, Py, PyAny, PyErr, PyResult, Python,
+};
+use serde::{ser::SerializeMap, Deserialize, Serialize};
 
 use flate2::Compression;
 
@@ -24,7 +29,137 @@ const TAG_COMPOUND: u8 = 10;
 const TAG_INT_ARRAY: u8 = 11;
 const TAG_LONG_ARRAY: u8 = 12;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[cfg(not(feature = "ordered_map"))]
+type Map<A, B> = HashMap<A, B>;
+
+#[cfg(feature = "ordered_map")]
+pub use map::Map;
+#[cfg(feature = "ordered_map")]
+mod map {
+    use std::{collections::HashMap, fmt::Debug, marker::PhantomData};
+
+    use pyo3::{pyclass, FromPyObject, IntoPyObject};
+    use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
+
+    #[derive(Clone, PartialEq, FromPyObject, IntoPyObject)]
+    pub struct Map<A: PartialEq, B>(Vec<(A, B)>);
+
+    impl<A, B> Map<A, B>
+    where
+        A: PartialEq,
+    {
+        pub fn new() -> Self {
+            Self(vec![])
+        }
+
+        pub fn insert(&mut self, key: A, value: B) -> Option<(A, B)> {
+            if let Some(v) = self.0.iter_mut().find(|e| e.0 == key) {
+                let mut swp = (key, value);
+                std::mem::swap(&mut swp, v);
+                Some(swp)
+            } else {
+                self.0.push((key, value));
+                None
+            }
+        }
+
+        pub fn iter(&self) -> impl Iterator<Item = &(A, B)> {
+            self.0.iter()
+        }
+    }
+    impl<A, B, C> From<C> for Map<A, B>
+    where
+        A: PartialEq,
+        C: IntoIterator<Item = (A, B)>,
+    {
+        fn from(value: C) -> Self {
+            let mut map = Self::new();
+            for v in value.into_iter() {
+                map.insert(v.0, v.1);
+            }
+
+            map
+        }
+    }
+
+    impl<A, B> Debug for Map<A, B>
+    where
+        A: PartialEq + Debug,
+        B: Debug,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_map()
+                .entries(self.0.iter().map(|e| (&e.0, &e.1)))
+                .finish()
+        }
+    }
+
+    impl<A, B> Serialize for Map<A, B>
+    where
+        A: PartialEq + Serialize,
+        B: Serialize,
+    {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut m = serializer.serialize_map(Some(self.0.len()))?;
+            for (a, b) in self.0.iter() {
+                m.serialize_entry(a, b)?
+            }
+            m.end()
+        }
+    }
+
+    impl<'a, A, B> Deserialize<'a> for Map<A, B>
+    where
+        A: PartialEq + Deserialize<'a>,
+        B: Deserialize<'a>,
+    {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'a>,
+        {
+            struct MapVisitor<Aa: PartialEq, Bb> {
+                marker: PhantomData<Map<Aa, Bb>>,
+            }
+
+            impl<'d, Aa, Bb> Visitor<'d> for MapVisitor<Aa, Bb>
+            where
+                Aa: PartialEq + Deserialize<'d>,
+                Bb: Deserialize<'d>,
+            {
+                type Value = Map<Aa, Bb>;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    writeln!(formatter, "mappie mappie")
+                }
+
+                fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+                where
+                    A: serde::de::MapAccess<'d>,
+                {
+                    let mut res = Map::new();
+                    if let Some(hint) = map.size_hint() {
+                        res.0.reserve(hint);
+                    }
+                    while let Some(v) = map.next_entry::<Aa, Bb>()? {
+                        res.insert(v.0, v.1);
+                    }
+
+                    Ok(res)
+                }
+            }
+            deserializer.deserialize_map(MapVisitor {
+                marker: PhantomData,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[pyclass]
+#[enum_convert]
 pub enum NbtValue {
     Byte(i8),
     Short(i16),
@@ -35,12 +170,14 @@ pub enum NbtValue {
     ByteArray(Vec<i8>),
     String(String),
     List(NbtList),
-    Compound(HashMap<String, NbtValue>),
+    Compound(Map<String, NbtValue>),
     IntArray(Vec<i32>),
     LongArray(Vec<i64>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[pyclass]
+#[enum_convert]
 pub enum NbtList {
     ByteList(Vec<i8>),
     ShortList(Vec<i16>),
@@ -51,10 +188,10 @@ pub enum NbtList {
     ByteArrayList(Vec<Vec<i8>>),
     StringList(Vec<String>),
     ListList(Vec<NbtList>),
-    CompoundList(Vec<HashMap<String, NbtValue>>),
+    CompoundList(Vec<Map<String, NbtValue>>),
     IntArrayList(Vec<Vec<i32>>),
     LongArrayList(Vec<Vec<i64>>),
-    EmptyList,
+    EmptyList(),
 }
 
 impl NbtValue {
@@ -125,11 +262,11 @@ impl NbtValue {
         Ok(output)
     }
 
-    fn compound_from_iter<'a, T>(iter: &mut T) -> Result<HashMap<String, NbtValue>>
+    fn compound_from_iter<'a, T>(iter: &mut T) -> Result<Map<String, NbtValue>>
     where
         T: Iterator<Item = &'a u8> + Debug,
     {
-        let mut output = HashMap::new();
+        let mut output = Map::new();
         loop {
             let tag = (iter).next().ok_or(Error::Malformed(line!()))?.to_owned();
             if tag == TAG_END {
@@ -234,7 +371,7 @@ impl NbtValue {
                 }
                 Ok(NbtList::LongArrayList(output))
             }
-            TAG_END => Ok(NbtList::EmptyList),
+            TAG_END => Ok(NbtList::EmptyList()),
             _ => Err(Error::Malformed(line!())),
         }
     }
@@ -576,7 +713,7 @@ impl NbtValue {
                     )?;
                 }
             }
-            NbtList::EmptyList => {
+            NbtList::EmptyList() => {
                 buffer.write_all(&[TAG_END])?;
                 buffer.write_all(&[0])?;
                 buffer.write_all(&[0])?;

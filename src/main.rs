@@ -1,52 +1,15 @@
-use minecraft_world::Result;
-use std::fmt::Debug;
-use std::io::{Read, Write};
-
 use clap::Parser;
-use minecraft_world::NbtValue;
-use serde::{Deserialize, Serialize};
+use minecraft_world::NbtFile;
 #[derive(Parser)]
 enum Options {
     FromJson,
     ToJson,
     CompressedFromJson,
     CompressedToJson,
-}
-
-#[derive(Serialize, Deserialize)]
-struct NbtFile {
-    name: String,
-    nbt: NbtValue,
-}
-
-impl NbtFile {
-    pub fn to_writer<T>(&self, writer: T) -> std::io::Result<()>
-    where
-        T: Write,
-    {
-        self.nbt.to_writer(&self.name, writer)
-    }
-    pub fn to_compressed_writer<T>(&self, writer: T) -> std::io::Result<()>
-    where
-        T: Write,
-    {
-        self.nbt.to_compressed_writer(&self.name, writer)
-    }
-
-    pub fn from_reader<T>(reader: T) -> Result<Self>
-    where
-        T: Read + Debug,
-    {
-        let (name, nbt) = NbtValue::from_reader(reader)?;
-        Ok(Self { name, nbt })
-    }
-    pub fn from_compressed_reader<T>(reader: T) -> Result<Self>
-    where
-        T: Read + Debug,
-    {
-        let (name, nbt) = NbtValue::from_compressed_reader(reader)?;
-        Ok(Self { name, nbt })
-    }
+    FromMsgPack,
+    ToMsgPack,
+    CompressedFromMsgPack,
+    CompressedToMsgPack,
 }
 
 fn main() {
@@ -67,6 +30,26 @@ fn main() {
             .unwrap(),
         Options::CompressedToJson => serde_json::ser::to_writer(
             std::io::stdout(),
+            &NbtFile::from_compressed_reader(std::io::stdin()).unwrap(),
+        )
+        .unwrap(),
+        Options::FromMsgPack => rmp_serde::decode::from_read::<_, NbtFile>(std::io::stdin())
+            .unwrap()
+            .to_writer(std::io::stdout())
+            .unwrap(),
+        Options::ToMsgPack => rmp_serde::encode::write(
+            &mut std::io::stdout(),
+            &NbtFile::from_reader(std::io::stdin()).unwrap(),
+        )
+        .unwrap(),
+        Options::CompressedFromMsgPack => {
+            rmp_serde::decode::from_read::<_, NbtFile>(std::io::stdin())
+                .unwrap()
+                .to_compressed_writer(std::io::stdout())
+                .unwrap()
+        }
+        Options::CompressedToMsgPack => rmp_serde::encode::write(
+            &mut std::io::stdout(),
             &NbtFile::from_compressed_reader(std::io::stdin()).unwrap(),
         )
         .unwrap(),
